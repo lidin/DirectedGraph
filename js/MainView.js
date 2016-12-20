@@ -9,7 +9,7 @@ function Event(sender) {
   this._listeners = [];
 }
 
-Event.prototype.attach = function(listener) {
+Event.prototype.attach = function (listener) {
   this._listeners.push(listener);
 };
 Event.prototype.notify = function (args) {
@@ -32,17 +32,18 @@ function DirectedGraphModel() {
   this.didRemoveEdge = new Event(this);
 };
 
-DirectedGraphModel.prototype.pushUniqueNode = function(id) {
-  const isContained = function(n) { return n == id; };
-  if (this.nodes.filter(isContained).length == 0) {
+DirectedGraphModel.prototype.pushUniqueNode = function (id) {
+  if (!this.nodes.includes(id)) {
     this.nodes.push(id);
     this.didAddNode.notify(id);
+    return id;
   }
+  return null;
 };
-DirectedGraphModel.prototype.addEdge = function(fromId, toId, propability) {
-  const edgeExist = function(e) { return e.from == fromId && e.to == toId; };
-  const nodesExist = function(n) { return n == fromId || n == toId; };
-  if (this.nodes.filter(edgeExist).length != 0) return null;
+DirectedGraphModel.prototype.addEdge = function (fromId, toId, propability) {
+  const edgeExist = function (e) { return e.from == fromId && e.to == toId; };
+  const nodesExist = function (n) { return n == fromId || n == toId; };
+  if (!this.nodes.find(edgeExist)) return null;
   if (this.nodes.filter(nodesExist).length != 2) return null;
 
   const edge = {from: fromId, to: toId, probability: probability};
@@ -50,13 +51,13 @@ DirectedGraphModel.prototype.addEdge = function(fromId, toId, propability) {
   this.didAddEdge.notify(edge);
   return edge;
 };
-DirectedGraphModel.prototype.popNode = function() {
+DirectedGraphModel.prototype.popNode = function () {
   const node = this.nodes.pop();
   this.didRemoveNode.notify(node);
   this.size = this.nodes.length;
   return node;
 };
-DirectedGraphModel.prototype.removeEdge = function(fromId, toId) {
+DirectedGraphModel.prototype.removeEdge = function (fromId, toId) {
   for (var i = 0; i < this.edges.length; i++) {
     const edge = this.edges[i];
     if (edge.from == fromId && edge.to == toId) {
@@ -75,7 +76,7 @@ DirectedGraphModel.prototype.removeEdge = function(fromId, toId) {
 /*-- ChangeButtonView --*/
 
 function ChangeButtonView(type, x, y, radius = 20) {
-  this.pos = new p5.Vector(x, y);
+  this.pos = createVector(x, y);
   this.radius = radius;
   this.type = type;
   this.pressed = false;
@@ -113,13 +114,13 @@ ChangeButtonView.prototype.render = function () {
 
 /*-- NodeView --*/
 
-function NodeView(id, x, y, radius = 25) {
-  this.pos = new p5.Vector(x, y);
-  this.id = id;
+function NodeView(node, x, y, radius = 25) {
+  this.pos = createVector(x, y);
+  this.node = node;
   this.radius = radius;
 }
 
-NodeView.prototype.render = function() {
+NodeView.prototype.render = function () {
   stroke(0);
   strokeWeight(2);
   fill(100);
@@ -128,7 +129,7 @@ NodeView.prototype.render = function() {
   fill(0);
   textSize(24);
   textAlign(CENTER, CENTER);
-  text(this.id, this.pos.x, this.pos.y);
+  text(this.node, this.pos.x, this.pos.y);
 };
 
 /*-- EdgeView --*/
@@ -142,7 +143,7 @@ function EdgeView(startNodeView, endNodeView) {
   this.arrowHeadSize = 10;
 }
 
-EdgeView.prototype.render = function() {
+EdgeView.prototype.render = function () {
   if (this.startPos != this.endPos) {
     // Edge arc
     const distanceVector = p5.Vector.sub(this.endPos, this.startPos);
@@ -200,7 +201,7 @@ function DirectedGraphView(graphModel) {
   this.didRemoveEdgeView = new Event(this);
 }
 
-DirectedGraphView.prototype.setGraphModel = function(graphModel) {
+DirectedGraphView.prototype.setGraphModel = function (graphModel) {
   if (!graphModel) return false;
 
   this.graphModel = graphModel;
@@ -220,9 +221,9 @@ DirectedGraphView.prototype.setGraphModel = function(graphModel) {
   };
 
   const addEdgeView = function (edge) {
-    const findNodeView = function (id) {
+    const findNodeView = function (node) {
       for (nodeView of _this.nodeViews) {
-        if (nodeView.id == id) return nodeView;
+        if (nodeView.node == node) return nodeView;
       }
       return null;
     };
@@ -240,17 +241,24 @@ DirectedGraphView.prototype.setGraphModel = function(graphModel) {
 
   this.graphModel.didAddNode.attach(function (_, n) { addNodeView(n); });
   this.graphModel.didAddEdge.attach(function (_, e) { addEdgeView(e); });
-  this.graphModel.didRemoveNode.attach(function () {
-    _this.didRemoveNodeView.notify(_this.nodeViews.pop());
-    _this._inc -= 50;
+  this.graphModel.didRemoveNode.attach(function (_, n) {
+    const index = _this.nodeViews.map(function (nv) {
+      return nv.node;
+    }).indexOf(n);
+    if (index != -1) {
+      const nodeView = _this.nodeViews[index];
+      _this.nodeViews.splice(index, 1);
+      _this.didRemoveNodeView.notify(nodeView);
+      _this._inc -= 50;
+    }
   });
   this.graphModel.didRemoveEdge.attach(function () {
-    _this.didRemoveEdgeView.notify(_this.edgeViews.pop());
+    //_this.didRemoveEdgeView.notify(_this.edgeViews.pop());
   });
 
   return true;
-}
-DirectedGraphView.prototype.render = function() {
+};
+DirectedGraphView.prototype.render = function () {
   this.addButtonView.render();
   if (this.graphModel.nodes.length > 0) {
     this.removeButtonView.render();
@@ -266,49 +274,76 @@ DirectedGraphView.prototype.render = function() {
 /*-- RoundButtonController --*/
 
 function RoundButtonController(roundButtonView) {
-  this.roundButtonView = roundButtonView;
-  this.draggable = false;
+  this.buttonView = roundButtonView;
   this.pressed = false;
-  this._dragOffset = null;
 
   this.didPress = new Event(this);
 }
 
-RoundButtonController.prototype.cursorIsInside = function () {
-  const distance = dist(mouseX, mouseY, this.roundButtonView.pos.x,
-    this.roundButtonView.pos.y);
-  return distance <= this.roundButtonView.radius;
+RoundButtonController.prototype.isCursorInside = function () {
+  const distance = dist(mouseX, mouseY, this.buttonView.pos.x,
+    this.buttonView.pos.y);
+  return distance <= this.buttonView.radius;
 };
-RoundButtonController.prototype.press = function() {
-  if (!this.pressed && this.cursorIsInside()) {
-    this.roundButtonView.pressed = this.pressed = true;
-    this._dragOffset = new p5.Vector(this.roundButtonView.x-mouseX,
-      this.roundButtonView.y-mouseY);
+RoundButtonController.prototype.press = function () {
+  if (!this.pressed && this.isCursorInside()) {
+    this.buttonView.pressed = this.pressed = true;
+    return true;
   }
+  return false;
 };
 RoundButtonController.prototype.unpress = function () {
-  if (this.pressed && this.cursorIsInside()) {
+  if (this.pressed && this.isCursorInside()) {
     this.didPress.notify();
   }
-  this.roundButtonView.pressed = this.pressed = false;
-  this._dragOffset = null;
-};
-RoundButtonController.prototype.drag = function () {
-  if (this.draggable && this.pressed) {
-    this.roundButtonView.pos.x = mouseX+this._dragOffset.x;
-    this.roundButtonView.pos.y = mouseY+this._dragOffset.y;
-  }
+  this.buttonView.pressed = this.pressed = false;
 };
 
 /*-- NodeController --*/
 
 function NodeController(nodeView) {
   this.parent.constructor.call(this, nodeView);
-  this.draggable = true;
+  this.nodeView = this.buttonView;
+  this._dragOffset = null;
 }
 NodeController.prototype = new RoundButtonController;
 NodeController.prototype.constructor = NodeController;
 NodeController.prototype.parent = RoundButtonController.prototype;
+
+NodeController.prototype.press = function () {
+  if (this.parent.press.call(this)) {
+    this._dragOffset = createVector(this.nodeView.pos.x-mouseX,
+      this.nodeView.pos.y-mouseY);
+    return true;
+  }
+  return false
+};
+NodeController.prototype.unpress = function () {
+  this.parent.unpress.call(this);
+  this._dragOffset = null;
+};
+NodeController.prototype.drag = function (otherNodeController) {
+  if (this.pressed) {
+    const mousePosition = createVector(mouseX, mouseY);
+    const uncollidedPosition = p5.Vector.add(mousePosition, this._dragOffset);
+    if (otherNodeController) {
+      const otherNodeView = otherNodeController.nodeView;
+      const distance = uncollidedPosition.dist(otherNodeView.pos);
+      const minimumDistance = this.nodeView.radius+otherNodeView.radius;
+      const collisionOffsetDistance = max(minimumDistance-distance, 0);
+      const collisionOffset = p5.Vector.sub(this.nodeView.pos,
+        otherNodeView.pos).setMag(collisionOffsetDistance);
+      const collidedPosition = p5.Vector.add(uncollidedPosition,
+        collisionOffset);
+
+      this.nodeView.pos.x = collidedPosition.x;
+      this.nodeView.pos.y = collidedPosition.y;
+    } else {
+      this.nodeView.pos.x = uncollidedPosition.x;
+      this.nodeView.pos.y = uncollidedPosition.y;
+    }
+  }
+};
 
 /*-- DirectedGraphController --*/
 
@@ -322,7 +357,7 @@ function DirectedGraphController(graphView) {
 
   const _this = this;
 
-  this._addButtonController.didPress.attach(function() {
+  this._addButtonController.didPress.attach(function () {
     _this.graphModel.pushUniqueNode(_this._getNextId());
   });
   this._removeButtonController.didPress.attach(function () {
@@ -339,7 +374,21 @@ DirectedGraphController.prototype._getNextId = function () {
   }
   return id;
 };
-DirectedGraphController.prototype.setGraphView = function(graphView) {
+DirectedGraphController.prototype.bringToFront = function (nodeController) {
+  if (this._nodeControllers[this._nodeControllers-1] == nodeController) {
+    return;
+  }
+
+  const index = this._nodeControllers.indexOf(nodeController);
+  if (index != -1) {
+    this._nodeControllers.splice(index, 1);
+    this._nodeControllers.push(nodeController);
+
+    this.graphView.nodeViews.splice(index, 1);
+    this.graphView.nodeViews.push(nodeController.nodeView);
+  }
+};
+DirectedGraphController.prototype.setGraphView = function (graphView) {
   if (!graphView) return false;
 
   this.graphView = graphView;
@@ -366,22 +415,29 @@ DirectedGraphController.prototype.setGraphView = function(graphView) {
   this.graphView.didAddEdgeView.attach(function (_, ev) {
     addEdgeController(ev);
   });
-  this.graphView.didRemoveNodeView.attach(function () {
-    _this._nodeControllers.pop();
+  this.graphView.didRemoveNodeView.attach(function (_, nv) {
+    const index = _this._nodeControllers.map(function (nc) {
+      return nc.nodeView;
+    }).indexOf(nv);
+    if (index != -1) {
+      const nodeController = _this._nodeControllers[index];
+      _this._nodeControllers.splice(index, 1);
+    }
   });
   this.graphView.didRemoveEdgeView.attach(function () {
-    _this._edgeControllers.pop();
+    //_this._edgeControllers.pop();
   });
 
   return true;
 };
-DirectedGraphController.prototype.press = function() {
+DirectedGraphController.prototype.press = function () {
   if (!this._addButtonController.press() &&
       !this._removeButtonController.press()) {
     if (!this._pressedNodeController) {
-      for (nodeController of this._nodeControllers) {
+      for (nodeController of this._nodeControllers.slice().reverse()) {
         nodeController.press()
         if (nodeController.pressed) {
+          this.bringToFront(nodeController);
           this._pressedNodeController = nodeController;
           return;
         }
@@ -389,7 +445,7 @@ DirectedGraphController.prototype.press = function() {
     }
   }
 };
-DirectedGraphController.prototype.unpress = function() {
+DirectedGraphController.prototype.unpress = function () {
   this._addButtonController.unpress();
   this._removeButtonController.unpress();
   if (this._pressedNodeController) {
@@ -400,6 +456,13 @@ DirectedGraphController.prototype.unpress = function() {
 DirectedGraphController.prototype.drag = function () {
   if (this._pressedNodeController) {
     this._pressedNodeController.drag();
+    // if (this._nodeControllers.length == 1) {
+    //   this._pressedNodeController.drag();
+    // }
+    // for (nodeController of this._nodeControllers) {
+    //   if (nodeController == this._pressedNodeController) continue;
+    //   this._pressedNodeController.drag(nodeController);
+    // }
   }
 };
 
@@ -427,7 +490,6 @@ function mouseReleased() {
 function mouseDragged() {
   graphController.drag();
 }
-
 
 function draw() {
   background(100);
