@@ -23,7 +23,6 @@ Event.prototype.notify = function (args) {
 /*-- DirectedGraphModel --*/
 
 function DirectedGraphModel() {
-  this.size = 0;
   this.nodes = [];
   this.edges = [];
 
@@ -33,14 +32,12 @@ function DirectedGraphModel() {
   this.didRemoveEdge = new Event(this);
 };
 
-DirectedGraphModel.prototype.addNode = function(id) {
+DirectedGraphModel.prototype.pushUniqueNode = function(id) {
   const isContained = function(n) { return n == id; };
-  if (this.nodes.filter(isContained).length != 0) return null;
-
-  this.nodes.push(id);
-  this.size++;
-  this.didAddNode.notify(id);
-  return id;
+  if (this.nodes.filter(isContained).length == 0) {
+    this.nodes.push(id);
+    this.didAddNode.notify(id);
+  }
 };
 DirectedGraphModel.prototype.addEdge = function(fromId, toId, propability) {
   const edgeExist = function(e) { return e.from == fromId && e.to == toId; };
@@ -53,19 +50,13 @@ DirectedGraphModel.prototype.addEdge = function(fromId, toId, propability) {
   this.didAddEdge.notify(edge);
   return edge;
 };
-DirectedGraphModel.prototype.removeNode = function(id) {
-  for (var i = 0; i < this.nodes.length; i++) {
-    const node = this.nodes[i];
-    if (node == id) {
-      this.nodes.splice(i, 1);
-      this.didRemoveNode.notify(node);
-      this.size--;
-      return node;
-    }
-  }
-  return null;
+DirectedGraphModel.prototype.popNode = function() {
+  const node = this.nodes.pop();
+  this.didRemoveNode.notify(node);
+  this.size = this.nodes.length;
+  return node;
 };
-DirectedGraphModel.prototype.removeConnection = function(fromId, toId) {
+DirectedGraphModel.prototype.removeEdge = function(fromId, toId) {
   for (var i = 0; i < this.edges.length; i++) {
     const edge = this.edges[i];
     if (edge.from == fromId && edge.to == toId) {
@@ -81,16 +72,52 @@ DirectedGraphModel.prototype.removeConnection = function(fromId, toId) {
 //-- View
 //----------------------------------------//
 
+/*-- ChangeButtonView --*/
+
+function ChangeButtonView(type, x, y, radius = 20) {
+  this.pos = new p5.Vector(x, y);
+  this.radius = radius;
+  this.type = type;
+  this.pressed = false;
+}
+
+const ChangeButtonType = {
+  INCREASE: "increase",
+  DECREASE: "decrease"
+};
+ChangeButtonView.prototype.render = function () {
+  colorMode(HSB, 360, 100, 100, 100);
+  const brightnessAmt = this.pressed ? 0.8 : 1;
+  const strokeColor = color(0, 0, 40*brightnessAmt);
+  const fillColor = this.type == ChangeButtonType.INCREASE ?
+    color(180, 20, 90*brightnessAmt) :
+    color(0, 20, 90*brightnessAmt);
+
+  noStroke();
+  fill(fillColor);
+  ellipse(this.pos.x, this.pos.y, 2*this.radius);
+
+  stroke(strokeColor);
+  strokeWeight(1);
+  line(
+    this.pos.x-this.radius+10, this.pos.y,
+    this.pos.x+this.radius-10, this.pos.y
+  );
+  if (this.type == ChangeButtonType.INCREASE) {
+    line(
+      this.pos.x, this.pos.y-this.radius+10,
+      this.pos.x, this.pos.y+this.radius-10
+    );
+  }
+};
+
 /*-- NodeView --*/
 
 function NodeView(id, x, y, radius = 25) {
   this.pos = new p5.Vector(x, y);
   this.id = id;
   this.radius = radius;
-  this.dragged = false;
-  this._dragOffset = null;
 }
-NodeView._instances = [];
 
 NodeView.prototype.render = function() {
   stroke(0);
@@ -159,15 +186,18 @@ EdgeView.prototype.render = function() {
 
 function DirectedGraphView(graphModel) {
   this.setGraphModel(graphModel ? graphModel : new DirectedGraphModel());
+  this.addButtonView = new ChangeButtonView(ChangeButtonType.INCREASE,
+    width-30, 30);
+  this.removeButtonView = new ChangeButtonView(ChangeButtonType.DECREASE,
+    width-30, 100);
+  this._inc = 25;
+  this._radius = 25;
+  this._width = (width-100);
 
   this.didAddNodeView = new Event(this);
   this.didAddEdgeView = new Event(this);
   this.didRemoveNodeView = new Event(this);
   this.didRemoveEdgeView = new Event(this);
-
-  this._inc = 25;
-  this._radius = 25;
-  this._width = (width-100);
 }
 
 DirectedGraphView.prototype.setGraphModel = function(graphModel) {
@@ -205,8 +235,8 @@ DirectedGraphView.prototype.setGraphModel = function(graphModel) {
     _this.didAddEdgeView.notify(edgeView);
   };
 
-  this.graphModel.nodes.forEach(function (n) { addNode(n); })
-  this.graphModel.nodes.forEach(function (e) { addEdge(e); })
+  this.graphModel.nodes.forEach(function (n) { addNodeView(n); })
+  this.graphModel.nodes.forEach(function (e) { addEdgeView(e); })
 
   this.graphModel.didAddNode.attach(function (_, n) { addNodeView(n); });
   this.graphModel.didAddEdge.attach(function (_, e) { addEdgeView(e); });
@@ -221,6 +251,10 @@ DirectedGraphView.prototype.setGraphModel = function(graphModel) {
   return true;
 }
 DirectedGraphView.prototype.render = function() {
+  this.addButtonView.render();
+  if (this.graphModel.nodes.length > 0) {
+    this.removeButtonView.render();
+  }
   this.edgeViews.forEach(function (ev) { ev.render(); });
   this.nodeViews.forEach(function (nv) { nv.render(); });
 };
@@ -229,153 +263,89 @@ DirectedGraphView.prototype.render = function() {
 //-- Controller
 //----------------------------------------//
 
-/*-- Button --*/
+/*-- RoundButtonController --*/
 
-function Button(x, y, color, radius) {
-  this.pos = new p5.Vector(x, y);
-  this.color = color;
-  this.enabled = true;
+function RoundButtonController(roundButtonView) {
+  this.roundButtonView = roundButtonView;
+  this.draggable = false;
   this.pressed = false;
-  this.radius = radius;
+  this._dragOffset = null;
 
-  this._lerpBrightnessAmt = 1;
-  this._lerpAlphaAmt = 0;
+  this.didPress = new Event(this);
 }
 
-Button.prototype.render = function() {
-  if (this.enabled && this.pressed && this._lerpBrightnessAmt > 0.8) {
-    this._lerpBrightnessAmt = max(this._lerpBrightnessAmt-0.1, 0.8);
-  } else if (!this.enabled || !this.pressed && this._lerpBrightnessAmt < 1) {
-    this._lerpBrightnessAmt = min(this._lerpBrightnessAmt+0.1, 1);
-  }
-
-  if (this.enabled && this._lerpAlphaAmt < 1) {
-    this._lerpAlphaAmt = min(this._lerpAlphaAmt+0.1, 1);
-  } else if (!this.enabled && this._lerpAlphaAmt > 0) {
-    this._lerpAlphaAmt = max(this._lerpAlphaAmt-0.1, 0);
-  }
-
-  noStroke();
-  fill(color(
-    hue(this.color),
-    saturation(this.color),
-    brightness(this.color)*this._lerpBrightnessAmt,
-    alpha(this.color)*this._lerpAlphaAmt
-  ));
-  ellipse(this.pos.x, this.pos.y, 2*this.radius);
+RoundButtonController.prototype.cursorIsInside = function () {
+  const distance = dist(mouseX, mouseY, this.roundButtonView.pos.x,
+    this.roundButtonView.pos.y);
+  return distance <= this.roundButtonView.radius;
 };
-
-/*-- AddButton --*/
-
-function AddButton(x, y, color, lineColor, radius = 20) {
-  this.parent.constructor.call(this, x, y, color, radius);
-  this.lineColor = lineColor;
-}
-AddButton.prototype = new Button;
-AddButton.prototype.constructor = AddButton;
-AddButton.prototype.parent = Button.prototype;
-
-AddButton.prototype.render = function() {
-  this.parent.render.call(this);
-
-  stroke(color(
-    hue(this.lineColor),
-    saturation(this.lineColor),
-    brightness(this.lineColor)*this._lerpBrightnessAmt,
-    alpha(this.lineColor)*this._lerpAlphaAmt
-  ));
-  strokeWeight(1);
-  line(
-    this.pos.x-this.radius+10, this.pos.y,
-    this.pos.x+this.radius-10, this.pos.y
-  );
-  line(
-    this.pos.x, this.pos.y-this.radius+10,
-    this.pos.x, this.pos.y+this.radius-10
-  );
+RoundButtonController.prototype.press = function() {
+  if (!this.pressed && this.cursorIsInside()) {
+    this.roundButtonView.pressed = this.pressed = true;
+    this._dragOffset = new p5.Vector(this.roundButtonView.x-mouseX,
+      this.roundButtonView.y-mouseY);
+  }
 };
-
-/*-- RemoveButton --*/
-
-function RemoveButton(x, y, color, lineColor, radius = 20) {
-  this.parent.constructor.call(this, x, y, color, radius);
-  this.lineColor = lineColor;
-}
-RemoveButton.prototype = new Button;
-RemoveButton.prototype.constructor = RemoveButton;
-RemoveButton.prototype.parent = Button.prototype;
-
-RemoveButton.prototype.render = function() {
-  this.parent.render.call(this);
-
-  noFill();
-  stroke(color(hue(this.lineColor), saturation(this.lineColor),
-    brightness(this.lineColor)*this._lerpBrightnessAmt,
-    alpha(this.lineColor)*this._lerpAlphaAmt));
-  strokeWeight(1);
-  line(this.pos.x-this.radius+10, this.pos.y, this.pos.x+this.radius-10,
-    this.pos.y);
+RoundButtonController.prototype.unpress = function () {
+  if (this.pressed && this.cursorIsInside()) {
+    this.didPress.notify();
+  }
+  this.roundButtonView.pressed = this.pressed = false;
+  this._dragOffset = null;
+};
+RoundButtonController.prototype.drag = function () {
+  if (this.draggable && this.pressed) {
+    this.roundButtonView.pos.x = mouseX+this._dragOffset.x;
+    this.roundButtonView.pos.y = mouseY+this._dragOffset.y;
+  }
 };
 
 /*-- NodeController --*/
 
 function NodeController(nodeView) {
-  this.nodeView = nodeView;
-  this.pressed = false;
-
-  this._initialDragPos = null;
-  this._dragOffset = null;
+  this.parent.constructor.call(this, nodeView);
+  this.draggable = true;
 }
-
-NodeController.prototype.press = function() {
-  if (!this.pressed) {
-    const distance = dist(mouseX, mouseY,
-      this.nodeView.pos.x, this.nodeView.pos.y);
-    if (distance <= this.nodeView.radius) {
-      this.pressed = true;
-      if (!this._initialDragPos) {
-        this._initialDragPos = new p5.Vector(mouseX, mouseY);
-      }
-      return this;
-    }
-  }
-  return null;
-};
-NodeController.prototype.unpress = function() {
-  if (!this.pressed) {
-    this.pressed = false;
-    this._initialDragPos = null;
-    return this;
-  }
-  return null;
-};
-NodeController.prototype.drag = function() {
-  if (this.pressed) {
-    if (!this._dragOffset) {
-      this._dragOffset = p5.Vector.sub(this.nodeView.pos, this._initialDragPos);
-    }
-    this.nodeView.pos.x = mouseX+this._dragOffset.x;
-    this.nodeView.pos.y = mouseY+this._dragOffset.y;
-  } else {
-    this._dragOffset = null;
-  }
-};
+NodeController.prototype = new RoundButtonController;
+NodeController.prototype.constructor = NodeController;
+NodeController.prototype.parent = RoundButtonController.prototype;
 
 /*-- DirectedGraphController --*/
 
-function DirectedGraphController(graphModel, graphView) {
-  this.graphModel = graphModel ? graphModel : new DirectedGraphModel();
+function DirectedGraphController(graphView) {
   this.setGraphView(graphView ? graphView : new DirectedGraphView());
+  this.graphModel = this.graphView.graphModel;
+  this._addButtonController = new RoundButtonController(
+    this.graphView.addButtonView);
+  this._removeButtonController = new RoundButtonController(
+    this.graphView.removeButtonView);
 
-  this._draggedNode = null;
+  const _this = this;
+
+  this._addButtonController.didPress.attach(function() {
+    _this.graphModel.pushUniqueNode(_this._getNextId());
+  });
+  this._removeButtonController.didPress.attach(function () {
+    _this.graphModel.popNode();
+  });
 }
 
+DirectedGraphController.prototype._getNextId = function () {
+  var i = this.graphModel.nodes.length;
+  var id = "";
+  while (i >= 0) {
+    id = String.fromCharCode(65+i%26) + id;
+    i = i/26-1;
+  }
+  return id;
+};
 DirectedGraphController.prototype.setGraphView = function(graphView) {
   if (!graphView) return false;
 
   this.graphView = graphView;
   this._nodeControllers = [];
   this._edgeControllers = [];
+  this._pressedNodeController = null;
 
   const _this = this;
 
@@ -406,114 +376,60 @@ DirectedGraphController.prototype.setGraphView = function(graphView) {
   return true;
 };
 DirectedGraphController.prototype.press = function() {
-  var pressedNode = null;
-  for (nodeController of this._nodeControllers) {
-    if (pressedNode = nodeController.press()) break;
+  if (!this._addButtonController.press() &&
+      !this._removeButtonController.press()) {
+    if (!this._pressedNodeController) {
+      for (nodeController of this._nodeControllers) {
+        nodeController.press()
+        if (nodeController.pressed) {
+          this._pressedNodeController = nodeController;
+          return;
+        }
+      }
+    }
   }
-  return pressedNode;
 };
 DirectedGraphController.prototype.unpress = function() {
-  this._draggedNode = null;
-  var unpressedNode = null;
-  for (nodeController of this._nodeControllers) {
-    if (unpressedNode = nodeController.unpress()) break;
+  this._addButtonController.unpress();
+  this._removeButtonController.unpress();
+  if (this._pressedNodeController) {
+    this._pressedNodeController.unpress();
+    this._pressedNodeController = null;
   }
-  return unpressedNode;
 };
-DirectedGraphController.prototype.drag = function() {
-  if (!this._draggedNode) {
-    for (nodeController of this._nodeControllers) {
-      if (draggedNode = nodeController.pressed ? nodeController : null) break;
-    }
-    if (!this._draggedNode) return;
+DirectedGraphController.prototype.drag = function () {
+  if (this._pressedNodeController) {
+    this._pressedNodeController.drag();
   }
-
-  this._draggedNode.drag();
 };
 
 //----------------------------------------//
 //-- Main program
 //----------------------------------------//
 
-var graphModel;
-var graphView;
 var graphController;
-var nodeViews;
-var draggedView;
-var initialDragPos;
-var addButton, removeButton;
-var inc = 25;
 
 function setup() {
   createCanvas(1200, 600);
   colorMode(HSB, 360, 100, 100, 100);
 
-  graphModel = new DirectedGraphModel();
-  graphView = new DirectedGraphView(graphModel);
-  graphController = new DirectedGraphController(graphModel, graphView);
-
-  const lineColor = color(0, 0, 40);
-  const buttonRadius = 20
-  addButton = new AddButton(width-buttonRadius-10,
-    buttonRadius+10,
-    color(180, 20, 90),
-    lineColor,
-    buttonRadius);
-  removeButton = new RemoveButton(width-buttonRadius-10,
-    addButton.pos.y+2*buttonRadius+30,
-    color(0, 20, 90),
-    lineColor,
-    buttonRadius);
-  removeButton.enabled = false;
+  graphController = new DirectedGraphController();
 }
-
-function getNextId() {
-  var i = graphModel.size;
-  var id = "";
-  while (i >= 0) {
-    id = String.fromCharCode(65+i%26) + id;
-    i = i/26-1;
-  }
-  return id;
-};
 
 function mousePressed() {
   graphController.press();
-  graphController.drag();
-
-  addButton.pressed = dist(mouseX, mouseY,
-    addButton.pos.x, addButton.pos.y) <= addButton.radius;
-  removeButton.pressed = dist(mouseX, mouseY,
-    removeButton.pos.x, removeButton.pos.y) <= removeButton.radius;
 }
 
 function mouseReleased() {
   graphController.unpress();
-
-  if (addButton.pressed && dist(mouseX, mouseY,
-      addButton.pos.x, addButton.pos.y) <= addButton.radius) {
-    // Add button pressed
-    graphModel.addNode(getNextId());
-    removeButton.enabled = true;
-  }
-
-  else if (removeButton.pressed && dist(mouseX, mouseY,
-      removeButton.pos.x, removeButton.pos.y) <= removeButton.radius) {
-    // Remove button pressed
-    graphModel.removeNode(graphModel.nodes[graphModel.size-1]);
-    if (graphModel.size <= 0) {
-      removeButton.enabled = false;
-    }
-  }
-
-  addButton.pressed = removeButton.pressed = false;
 }
+
+function mouseDragged() {
+  graphController.drag();
+}
+
 
 function draw() {
   background(100);
-
-  addButton.render();
-  removeButton.render();
-
-  graphView.render();
+  graphController.graphView.render();
 }
