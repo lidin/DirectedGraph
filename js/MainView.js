@@ -13,7 +13,8 @@ Event.prototype.attach = function (listener) {
   this._listeners.push(listener);
 };
 Event.prototype.notify = function (args) {
-  this._listeners.forEach(function (l) { l(this._sender, args); });
+  const _this = this;
+  this._listeners.forEach(function (l) { l(_this._sender, args); });
 };
 
 //----------------------------------------//
@@ -23,16 +24,25 @@ Event.prototype.notify = function (args) {
 /*-- DirectedGraphModel --*/
 
 function DirectedGraphModel() {
-  this.nodes = [];
-  this.edges = [];
-
   this.didAddNode = new Event(this);
   this.didAddEdge = new Event(this);
   this.didRemoveNode = new Event(this);
   this.didRemoveEdge = new Event(this);
+  this.nodes = [];
+  this.edges = [];
 };
 
+DirectedGraphModel.prototype.getNextId = function () {
+  var i = this.nodes.length;
+  var id = "";
+  while (i >= 0) {
+    id = String.fromCharCode(65+i%26) + id;
+    i = i/26-1;
+  }
+  return id;
+};
 DirectedGraphModel.prototype.pushUniqueNode = function (id) {
+  if (!id) id = this.getNextId();
   if (!this.nodes.includes(id)) {
     this.nodes.push(id);
     this.didAddNode.notify(id);
@@ -40,13 +50,17 @@ DirectedGraphModel.prototype.pushUniqueNode = function (id) {
   }
   return null;
 };
-DirectedGraphModel.prototype.addEdge = function (fromId, toId, propability) {
-  const edgeExist = function (e) { return e.from == fromId && e.to == toId; };
-  const nodesExist = function (n) { return n == fromId || n == toId; };
-  if (!this.nodes.find(edgeExist)) return null;
-  if (this.nodes.filter(nodesExist).length != 2) return null;
+DirectedGraphModel.prototype.addEdge = function (fromNode, toNode,
+    probability) {
+  const edgeExist = function (e) { return e.from == fromNode &&
+    e.to == toNode; };
+  const nodesExist = function (n) { return n == fromNode || n == toNode; };
+  if (toNode) {
+    if (!this.nodes.find(edgeExist)) return null;
+    if (this.nodes.filter(nodesExist).length != 2) return null;
+  }
 
-  const edge = {from: fromId, to: toId, probability: probability};
+  const edge = {from: fromNode, to: toNode, probability: probability};
   this.edges.push(edge);
   this.didAddEdge.notify(edge);
   return edge;
@@ -57,10 +71,13 @@ DirectedGraphModel.prototype.popNode = function () {
   this.size = this.nodes.length;
   return node;
 };
-DirectedGraphModel.prototype.removeEdge = function (fromId, toId) {
+DirectedGraphModel.prototype.removeEdge = function (fromNode, toNode) {
+  if (!fromNode || !toNode) {
+    this.didRemoveEdge.notify(this.edges.pop());
+  }
   for (var i = 0; i < this.edges.length; i++) {
     const edge = this.edges[i];
-    if (edge.from == fromId && edge.to == toId) {
+    if (edge.from == fromNode && edge.to == toNode) {
       this.edges.splice(i, 1);
       this.didRemoveEdge.notify(edge);
       return edge;
@@ -118,87 +135,117 @@ function NodeView(node, x, y, radius = 25) {
   this.pos = createVector(x, y);
   this.node = node;
   this.radius = radius;
+  this.pressed = false;
+  this.hovered = false;
+  this.edgeHandleRadius = 5;
+  this.isFromNodeView = false;
 }
 
+NodeView.prototype.getEdgeHandlePos = function () {
+  return createVector(this.pos.x+this.radius+this.edgeHandleRadius, this.pos.y);
+};
 NodeView.prototype.render = function () {
   stroke(0);
   strokeWeight(2);
   fill(100);
   ellipse(this.pos.x, this.pos.y, 2*this.radius);
 
+  if ((!NodeController.addEdgeMode && this.hovered && !this.pressed) ||
+      this.isFromNodeView) {
+    const edgeHandlePos = this.getEdgeHandlePos();
+    ellipse(edgeHandlePos.x, edgeHandlePos.y, 2*this.edgeHandleRadius);
+  }
+
   fill(0);
   textSize(24);
   textAlign(CENTER, CENTER);
   text(this.node, this.pos.x, this.pos.y);
+
+  if (NodeController.addEdgeMode && this.hovered) {
+    fill(240, 20, 90, 50);
+    noStroke();
+    ellipse(this.pos.x, this.pos.y, 2*(this.radius-5));
+  }
 };
 
 /*-- EdgeView --*/
 
-function EdgeView(startNodeView, endNodeView) {
+function EdgeView(startNodeView, endNodeView, probability) {
   this.startNodeView = startNodeView;
   this.endNodeView = endNodeView;
+  this.probability = probability;
   this.startPos = startNodeView.pos;
-  this.endPos = endNodeView.pos;
+  this.endPos = endNodeView ? endNodeView.pos : undefined;
   this.angle = PI/3;
   this.arrowHeadSize = 10;
 }
 
 EdgeView.prototype.render = function () {
-  if (this.startPos != this.endPos) {
-    // Edge arc
-    const distanceVector = p5.Vector.sub(this.endPos, this.startPos);
-    const distance = distanceVector.mag();
-    const radius = distance/2/sin(this.angle/2);
+  if (this.endNodeView) {
+    const startPos = this.startNodeView.pos;
+    const endPos = this.endNodeView.pos;
+    if (startPos != endPos) {
+      // Edge arc
+      const distanceVector = p5.Vector.sub(this.endPos, this.startPos);
+      const distance = distanceVector.mag();
+      const radius = distance/2/sin(this.angle/2);
 
-    const a = 2*asin(this.startNodeView.radius/2/radius);
-    const b = 2*asin(this.endNodeView.radius/2/radius);
+      const a = 2*asin(this.startNodeView.radius/2/radius);
+      const b = 2*asin(this.endNodeView.radius/2/radius);
 
-    const radiusVector = distanceVector.copy();
-    radiusVector.rotate(-(PI+this.angle)/2).setMag(radius);
-    const origin = p5.Vector.sub(this.startPos, radiusVector);
+      const radiusVector = distanceVector.copy();
+      radiusVector.rotate(-(PI+this.angle)/2).setMag(radius);
+      const origin = p5.Vector.sub(this.startPos, radiusVector);
 
-    stroke(0);
-    strokeWeight(2);
-    noFill();
-    arc(origin.x, origin.y, 2*radius, 2*radius, radiusVector.heading()+a,
-      radiusVector.heading()+this.angle-b);
+      stroke(0);
+      strokeWeight(2);
+      noFill();
+      arc(origin.x, origin.y, 2*radius, 2*radius, radiusVector.heading()+a,
+        radiusVector.heading()+this.angle-b);
 
-    // Edge arrow head
-    const c = 2*asin(this.arrowHeadSize/2/radius);
-    const newRadiusVector = radiusVector.copy();
+      // Edge arrow head
+      const c = 2*asin(this.arrowHeadSize/2/radius);
+      const newRadiusVector = radiusVector.copy();
 
-    newRadiusVector.rotate(this.angle-b);
-    const point1 = p5.Vector.add(origin, newRadiusVector);
+      newRadiusVector.rotate(this.angle-b);
+      const point1 = p5.Vector.add(origin, newRadiusVector);
 
-    newRadiusVector.rotate(-c);
-    newRadiusVector.setMag(newRadiusVector.mag()+this.arrowHeadSize/2);
-    const point2 = p5.Vector.add(origin, newRadiusVector);
+      newRadiusVector.rotate(-c);
+      newRadiusVector.setMag(newRadiusVector.mag()+this.arrowHeadSize/2);
+      const point2 = p5.Vector.add(origin, newRadiusVector);
 
-    newRadiusVector.setMag(newRadiusVector.mag()-this.arrowHeadSize);
-    const point3 = p5.Vector.add(origin, newRadiusVector);
+      newRadiusVector.setMag(newRadiusVector.mag()-this.arrowHeadSize);
+      const point3 = p5.Vector.add(origin, newRadiusVector);
 
-    fill(0);
-    triangle(point1.x, point1.y, point2.x, point2.y, point3.x, point3.y);
+      fill(0);
+      triangle(point1.x, point1.y, point2.x, point2.y, point3.x, point3.y);
+    } else {
+    }
   } else {
+    const edgeHandlePos = this.startNodeView.getEdgeHandlePos();
+    const edgeHandleRadius = this.startNodeView.edgeHandleRadius;
+    fill(240, 20, 90);
+    noStroke();
+    ellipse(edgeHandlePos.x, edgeHandlePos.y, 2*(edgeHandleRadius-2));
+    ellipse(mouseX, mouseY, 2*(edgeHandleRadius-2));
+    stroke(240, 20, 90);
+    strokeWeight(2);
+    line(edgeHandlePos.x, edgeHandlePos.y, mouseX, mouseY);
   }
 };
 
 /*-- DirectedGraphView --*/
 
 function DirectedGraphView(graphModel) {
+  this.didAddNodeView = new Event(this);
+  this.didAddEdgeView = new Event(this);
+  this.didRemoveNodeView = new Event(this);
+  this.didRemoveEdgeView = new Event(this);
   this.setGraphModel(graphModel ? graphModel : new DirectedGraphModel());
   this.addButtonView = new ChangeButtonView(ChangeButtonType.INCREASE,
     width-30, 30);
   this.removeButtonView = new ChangeButtonView(ChangeButtonType.DECREASE,
     width-30, 100);
-  this._inc = 25;
-  this._radius = 25;
-  this._width = (width-100);
-
-  this.didAddNodeView = new Event(this);
-  this.didAddEdgeView = new Event(this);
-  this.didRemoveNodeView = new Event(this);
-  this.didRemoveEdgeView = new Event(this);
 }
 
 DirectedGraphView.prototype.setGraphModel = function (graphModel) {
@@ -209,14 +256,13 @@ DirectedGraphView.prototype.setGraphModel = function (graphModel) {
   this.edgeViews = [];
 
   const _this = this;
+  let inc = 25;
 
   const addNodeView = function (node) {
-    const nodeView = new NodeView(node,
-      _this._inc%_this._width,
-      _this._radius+2*_this._radius*floor(_this._inc/_this._width),
-      _this._radius);
+    const nodeView = new NodeView(node, inc%(width-100),
+      25+50*floor(inc/(width-100)), 25);
     _this.nodeViews.push(nodeView);
-    _this._inc += 50;
+    inc += 50;
     _this.didAddNodeView.notify(nodeView);
   };
 
@@ -225,13 +271,13 @@ DirectedGraphView.prototype.setGraphModel = function (graphModel) {
       for (nodeView of _this.nodeViews) {
         if (nodeView.node == node) return nodeView;
       }
-      return null;
+      return undefined;
     };
 
-    var startNodeView, endNodeView;
+    let startNodeView, endNodeView;
     if (!(startNodeView = findNodeView(edge.from))) return false;
-    if (!(endNodeView = findNodeView(edge.to))) return false;
-    const edgeView = new EdgeView(startNodeView, endNodeView);
+    endNodeView = findNodeView(edge.to)
+    const edgeView = new EdgeView(startNodeView, endNodeView, edge.probability);
     _this.edgeViews.push(edgeView);
     _this.didAddEdgeView.notify(edgeView);
   };
@@ -249,22 +295,28 @@ DirectedGraphView.prototype.setGraphModel = function (graphModel) {
       const nodeView = _this.nodeViews[index];
       _this.nodeViews.splice(index, 1);
       _this.didRemoveNodeView.notify(nodeView);
-      _this._inc -= 50;
+      inc -= 50;
     }
   });
   this.graphModel.didRemoveEdge.attach(function () {
-    //_this.didRemoveEdgeView.notify(_this.edgeViews.pop());
+    // TODO: Make it work with an arbitrary edge.
+    _this.didRemoveEdgeView.notify(_this.edgeViews.pop());
   });
 
   return true;
 };
 DirectedGraphView.prototype.render = function () {
+  if (NodeController.addEdgeMode) {
+    this.nodeViews.forEach(function (nv) { nv.render(); });
+    this.edgeViews.forEach(function (ev) { ev.render(); });
+  } else {
+    this.edgeViews.forEach(function (ev) { ev.render(); });
+    this.nodeViews.forEach(function (nv) { nv.render(); });
+  }
   this.addButtonView.render();
   if (this.graphModel.nodes.length > 0) {
     this.removeButtonView.render();
   }
-  this.edgeViews.forEach(function (ev) { ev.render(); });
-  this.nodeViews.forEach(function (nv) { nv.render(); });
 };
 
 //----------------------------------------//
@@ -274,10 +326,9 @@ DirectedGraphView.prototype.render = function () {
 /*-- RoundButtonController --*/
 
 function RoundButtonController(roundButtonView) {
+  this.didPress = new Event(this);
   this.buttonView = roundButtonView;
   this.pressed = false;
-
-  this.didPress = new Event(this);
 }
 
 RoundButtonController.prototype.isCursorInside = function () {
@@ -285,63 +336,91 @@ RoundButtonController.prototype.isCursorInside = function () {
     this.buttonView.pos.y);
   return distance <= this.buttonView.radius;
 };
-RoundButtonController.prototype.press = function () {
-  if (!this.pressed && this.isCursorInside()) {
-    this.buttonView.pressed = this.pressed = true;
-    return true;
-  }
-  return false;
+RoundButtonController.prototype.mouseHover = function () {
+  return this.buttonView.hovered = this.isCursorInside();
 };
-RoundButtonController.prototype.unpress = function () {
-  if (this.pressed && this.isCursorInside()) {
-    this.didPress.notify();
-  }
+RoundButtonController.prototype.mousePress = function () {
+  return this.pressed = this.buttonView.pressed = this.isCursorInside();
+};
+RoundButtonController.prototype.mouseRelease = function () {
+  if (this.isCursorInside()) this.didPress.notify();
   this.buttonView.pressed = this.pressed = false;
 };
 
 /*-- NodeController --*/
 
 function NodeController(nodeView) {
+  this.didPressEdgeHandle = new Event(this);
   this.parent.constructor.call(this, nodeView);
   this.nodeView = this.buttonView;
+  this._isFromNodeController = false;
   this._dragOffset = null;
 }
 NodeController.prototype = new RoundButtonController;
 NodeController.prototype.constructor = NodeController;
 NodeController.prototype.parent = RoundButtonController.prototype;
+NodeController.addEdgeMode = false;
 
-NodeController.prototype.press = function () {
-  if (this.parent.press.call(this)) {
-    this._dragOffset = createVector(this.nodeView.pos.x-mouseX,
-      this.nodeView.pos.y-mouseY);
-    return true;
+NodeController.prototype.mouseHover = function () {
+  if (NodeController.addEdgeMode) {
+    const distance = dist(mouseX, mouseY, this.nodeView.pos.x,
+      this.nodeView.pos.y)
+    return this.nodeView.hovered = distance <= this.nodeView.radius-5;
+  } else {
+    this.parent.mouseHover.call(this);
+    const edgeHandlePos = this.nodeView.getEdgeHandlePos();
+    const distance = dist(mouseX, mouseY, edgeHandlePos.x, edgeHandlePos.y);
+    return this.nodeView.hovered |= distance <=
+      this.nodeView.edgeHandleRadius+5;
+  }
+};
+NodeController.prototype.mousePress = function () {
+  if (NodeController.addEdgeMode) {
+    // TODO: Add code.
+  } else {
+    if (this.parent.mousePress.call(this)) {
+      this._dragOffset = createVector(this.nodeView.pos.x-mouseX,
+        this.nodeView.pos.y-mouseY);
+      return true;
+    } else {
+      const edgeHandlePos = this.nodeView.getEdgeHandlePos();
+      const distance = dist(mouseX, mouseY, edgeHandlePos.x, edgeHandlePos.y);
+      if (distance <= this.nodeView.edgeHandleRadius) {
+        this.nodeView.hovered = false;
+        this.didPressEdgeHandle.notify();
+        NodeController.addEdgeMode = true;
+        this.nodeView.isFromNodeView = true;
+      }
+    }
   }
   return false
 };
-NodeController.prototype.unpress = function () {
-  this.parent.unpress.call(this);
+NodeController.prototype.mouseRelease = function () {
+  this.parent.mouseRelease.call(this);
   this._dragOffset = null;
 };
 NodeController.prototype.drag = function (otherNodeController) {
   if (this.pressed) {
-    const mousePosition = createVector(mouseX, mouseY);
-    const uncollidedPosition = p5.Vector.add(mousePosition, this._dragOffset);
-    if (otherNodeController) {
-      const otherNodeView = otherNodeController.nodeView;
-      const distance = uncollidedPosition.dist(otherNodeView.pos);
-      const minimumDistance = this.nodeView.radius+otherNodeView.radius;
-      const collisionOffsetDistance = max(minimumDistance-distance, 0);
-      const collisionOffset = p5.Vector.sub(this.nodeView.pos,
-        otherNodeView.pos).setMag(collisionOffsetDistance);
-      const collidedPosition = p5.Vector.add(uncollidedPosition,
-        collisionOffset);
-
-      this.nodeView.pos.x = collidedPosition.x;
-      this.nodeView.pos.y = collidedPosition.y;
-    } else {
-      this.nodeView.pos.x = uncollidedPosition.x;
-      this.nodeView.pos.y = uncollidedPosition.y;
-    }
+    // const mousePosition = createVector(mouseX, mouseY);
+    // const uncollidedPosition = p5.Vector.add(mousePosition, this._dragOffset);
+    // if (otherNodeController) {
+    //   const otherNodeView = otherNodeController.nodeView;
+    //   const distance = uncollidedPosition.dist(otherNodeView.pos);
+    //   const minimumDistance = this.nodeView.radius+otherNodeView.radius;
+    //   const collisionOffsetDistance = max(minimumDistance-distance, 0);
+    //   const collisionOffset = p5.Vector.sub(this.nodeView.pos,
+    //     otherNodeView.pos).setMag(collisionOffsetDistance);
+    //   const collidedPosition = p5.Vector.add(uncollidedPosition,
+    //     collisionOffset);
+    //
+    //   this.nodeView.pos.x = collidedPosition.x;
+    //   this.nodeView.pos.y = collidedPosition.y;
+    // } else {
+    //   this.nodeView.pos.x = uncollidedPosition.x;
+    //   this.nodeView.pos.y = uncollidedPosition.y;
+    // }
+    this.nodeView.pos.x = mouseX+this._dragOffset.x;
+    this.nodeView.pos.y = mouseY+this._dragOffset.y;
   }
 };
 
@@ -358,22 +437,13 @@ function DirectedGraphController(graphView) {
   const _this = this;
 
   this._addButtonController.didPress.attach(function () {
-    _this.graphModel.pushUniqueNode(_this._getNextId());
+    _this.graphModel.pushUniqueNode();
   });
   this._removeButtonController.didPress.attach(function () {
     _this.graphModel.popNode();
   });
 }
 
-DirectedGraphController.prototype._getNextId = function () {
-  var i = this.graphModel.nodes.length;
-  var id = "";
-  while (i >= 0) {
-    id = String.fromCharCode(65+i%26) + id;
-    i = i/26-1;
-  }
-  return id;
-};
 DirectedGraphController.prototype.bringToFront = function (nodeController) {
   if (this._nodeControllers[this._nodeControllers-1] == nodeController) {
     return;
@@ -399,15 +469,19 @@ DirectedGraphController.prototype.setGraphView = function (graphView) {
   const _this = this;
 
   const addNodeController = function (nodeView) {
-    _this._nodeControllers.push(new NodeController(nodeView));
+    const nodeController = new NodeController(nodeView);
+    nodeController.didPressEdgeHandle.attach(function (sender) {
+      _this.graphModel.addEdge(sender.nodeView.node);
+    });
+    _this._nodeControllers.push(nodeController);
   };
 
   const addEdgeController = function (edgeView) {
-    _this._edgeControllers.push(new EdgeController(edgeView));
+    //_this._edgeControllers.push(new EdgeController(edgeView));
   };
 
   this.graphView.nodeViews.forEach(function (nv) { addNodeController(nv); });
-  this.graphView.nodeViews.forEach(function (nv) { addNodeController(nv); });
+  this.graphView.edgeViews.forEach(function (ev) { addEdgeController(ev); });
 
   this.graphView.didAddNodeView.attach(function (_, nv) {
     addNodeController(nv);
@@ -424,18 +498,27 @@ DirectedGraphController.prototype.setGraphView = function (graphView) {
       _this._nodeControllers.splice(index, 1);
     }
   });
-  this.graphView.didRemoveEdgeView.attach(function () {
+  this.graphView.didRemoveEdgeView.attach(function (_, edgeView) {
     //_this._edgeControllers.pop();
+    if (!edgeView.endNodeView) {
+      NodeController.addEdgeMode = false;
+      edgeView.startNodeView.isFromNodeView = false;
+    }
   });
 
   return true;
 };
-DirectedGraphController.prototype.press = function () {
-  if (!this._addButtonController.press() &&
-      !this._removeButtonController.press()) {
+DirectedGraphController.prototype.mouseHover = function () {
+  this._nodeControllers.forEach(function (nc) { nc.mouseHover(); });
+};
+DirectedGraphController.prototype.mousePress = function () {
+  if ((!this._addButtonController.mousePress() &&
+      !this._removeButtonController.mousePress()) ||
+      NodeController.addEdgeMode) {
+    var wasAddEdgeMode = NodeController.addEdgeMode;
     if (!this._pressedNodeController) {
       for (nodeController of this._nodeControllers.slice().reverse()) {
-        nodeController.press()
+        nodeController.mousePress()
         if (nodeController.pressed) {
           this.bringToFront(nodeController);
           this._pressedNodeController = nodeController;
@@ -443,13 +526,16 @@ DirectedGraphController.prototype.press = function () {
         }
       }
     }
+    if (wasAddEdgeMode) {
+      this.graphModel.removeEdge();
+    }
   }
 };
-DirectedGraphController.prototype.unpress = function () {
-  this._addButtonController.unpress();
-  this._removeButtonController.unpress();
+DirectedGraphController.prototype.mouseRelease = function () {
+  this._addButtonController.mouseRelease();
+  this._removeButtonController.mouseRelease();
   if (this._pressedNodeController) {
-    this._pressedNodeController.unpress();
+    this._pressedNodeController.mouseRelease();
     this._pressedNodeController = null;
   }
 };
@@ -476,15 +562,23 @@ function setup() {
   createCanvas(1200, 600);
   colorMode(HSB, 360, 100, 100, 100);
 
-  graphController = new DirectedGraphController();
+  const graphModel = new DirectedGraphModel();
+  for (var i = 0; i < 3; i++) {
+    graphModel.pushUniqueNode();
+  }
+  graphController = new DirectedGraphController(new DirectedGraphView(graphModel));
+}
+
+function mouseMoved() {
+  graphController.mouseHover();
 }
 
 function mousePressed() {
-  graphController.press();
+  graphController.mousePress();
 }
 
 function mouseReleased() {
-  graphController.unpress();
+  graphController.mouseRelease();
 }
 
 function mouseDragged() {
