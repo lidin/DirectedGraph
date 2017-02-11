@@ -56,7 +56,7 @@ DirectedGraphModel.prototype.addEdge = function (fromNode, toNode,
     e.to == toNode; };
   const nodesExist = function (n) { return n == fromNode || n == toNode; };
   if (toNode) {
-    if (!this.nodes.find(edgeExist)) return null;
+    if (this.nodes.find(edgeExist)) return null;
     if (this.nodes.filter(nodesExist).length != 2) return null;
   }
 
@@ -73,7 +73,9 @@ DirectedGraphModel.prototype.popNode = function () {
 };
 DirectedGraphModel.prototype.removeEdge = function (fromNode, toNode) {
   if (!fromNode || !toNode) {
-    this.didRemoveEdge.notify(this.edges.pop());
+    const edge = this.edges.pop();
+    this.didRemoveEdge.notify(edge);
+    return edge;
   }
   for (var i = 0; i < this.edges.length; i++) {
     const edge = this.edges[i];
@@ -174,6 +176,11 @@ function EdgeView(startNodeView, endNodeView, probability) {
   this.startNodeView = startNodeView;
   this.endNodeView = endNodeView;
   this.probability = probability;
+  this.edge = {
+    from: startNodeView.node,
+    to: endNodeView ? endNodeView.node : undefined,
+    probability: probability
+  };
   this.startPos = startNodeView.pos;
   this.endPos = endNodeView ? endNodeView.pos : undefined;
   this.angle = PI/3;
@@ -298,9 +305,23 @@ DirectedGraphView.prototype.setGraphModel = function (graphModel) {
       inc -= 50;
     }
   });
-  this.graphModel.didRemoveEdge.attach(function () {
-    // TODO: Make it work with an arbitrary edge.
-    _this.didRemoveEdgeView.notify(_this.edgeViews.pop());
+  this.graphModel.didRemoveEdge.attach(function (_, e) {
+    let index = -1;
+    for (; (index+1) < _this.edgeViews.length; index++) {
+      const edgeView = _this.edgeViews[index+1];
+      if (edgeView.edge.from == e.from && edgeView.edge.to == e.to) {
+        index++;
+        break;
+      }
+    }
+    // const index = _this.edgeViews.map(function (ev) {
+    //   return ev.edge;
+    // }).indexOf(e);
+    if (index != -1) {
+      const edgeView = _this.edgeViews[index];
+      _this.edgeViews.splice(index, 1);
+      _this.didRemoveEdgeView.notify(edgeView);
+    }
   });
 
   return true;
@@ -353,6 +374,7 @@ function NodeController(nodeView) {
   this.didPressEdgeHandle = new Event(this);
   this.parent.constructor.call(this, nodeView);
   this.nodeView = this.buttonView;
+  this.node = this.nodeView.node;
   this._isFromNodeController = false;
   this._dragOffset = null;
 }
@@ -362,44 +384,36 @@ NodeController.prototype.parent = RoundButtonController.prototype;
 NodeController.addEdgeMode = false;
 
 NodeController.prototype.mouseHover = function () {
-  if (NodeController.addEdgeMode) {
-    const distance = dist(mouseX, mouseY, this.nodeView.pos.x,
-      this.nodeView.pos.y)
-    return this.nodeView.hovered = distance <= this.nodeView.radius-5;
-  } else {
-    this.parent.mouseHover.call(this);
-    const edgeHandlePos = this.nodeView.getEdgeHandlePos();
-    const distance = dist(mouseX, mouseY, edgeHandlePos.x, edgeHandlePos.y);
-    return this.nodeView.hovered |= distance <=
-      this.nodeView.edgeHandleRadius+5;
-  }
+  this.parent.mouseHover.call(this);
+  const edgeHandlePos = this.nodeView.getEdgeHandlePos();
+  const distance = dist(mouseX, mouseY, edgeHandlePos.x, edgeHandlePos.y);
+  return this.nodeView.hovered |= distance <= this.nodeView.edgeHandleRadius+5;
 };
 NodeController.prototype.mousePress = function () {
-  if (NodeController.addEdgeMode) {
-    // TODO: Add code.
+  if (this.parent.mousePress.call(this)) {
+    this._dragOffset = createVector(this.nodeView.pos.x-mouseX,
+      this.nodeView.pos.y-mouseY);
+    return true;
   } else {
-    if (this.parent.mousePress.call(this)) {
-      this._dragOffset = createVector(this.nodeView.pos.x-mouseX,
-        this.nodeView.pos.y-mouseY);
+    const edgeHandlePos = this.nodeView.getEdgeHandlePos();
+    const distance = dist(mouseX, mouseY, edgeHandlePos.x, edgeHandlePos.y);
+    if (distance <= this.nodeView.edgeHandleRadius) {
+      this.nodeView.hovered = false;
+      this.didPressEdgeHandle.notify();
+      NodeController.addEdgeMode = true;
+      this.nodeView.isFromNodeView = true;
       return true;
-    } else {
-      const edgeHandlePos = this.nodeView.getEdgeHandlePos();
-      const distance = dist(mouseX, mouseY, edgeHandlePos.x, edgeHandlePos.y);
-      if (distance <= this.nodeView.edgeHandleRadius) {
-        this.nodeView.hovered = false;
-        this.didPressEdgeHandle.notify();
-        NodeController.addEdgeMode = true;
-        this.nodeView.isFromNodeView = true;
-      }
     }
   }
   return false
 };
 NodeController.prototype.mouseRelease = function () {
   this.parent.mouseRelease.call(this);
+  NodeController.addEdgeMode = false;
+  this.nodeView.isFromNodeView = false;
   this._dragOffset = null;
 };
-NodeController.prototype.drag = function (otherNodeController) {
+NodeController.prototype.mouseDrag = function (otherNodeController) {
   if (this.pressed) {
     // const mousePosition = createVector(mouseX, mouseY);
     // const uncollidedPosition = p5.Vector.add(mousePosition, this._dragOffset);
@@ -495,6 +509,14 @@ DirectedGraphController.prototype.setGraphView = function (graphView) {
     }).indexOf(nv);
     if (index != -1) {
       const nodeController = _this._nodeControllers[index];
+      const connectedEdges = [];
+      for (edge of _this.graphModel.edges) {
+        if (edge.to == nodeController.node ||
+            edge.from == nodeController.node) {
+          connectedEdges.push(edge);
+        }
+      }
+      connectedEdges.forEach(function (e) { _this.graphModel.removeEdge(e); });
       _this._nodeControllers.splice(index, 1);
     }
   });
@@ -515,19 +537,14 @@ DirectedGraphController.prototype.mousePress = function () {
   if ((!this._addButtonController.mousePress() &&
       !this._removeButtonController.mousePress()) ||
       NodeController.addEdgeMode) {
-    var wasAddEdgeMode = NodeController.addEdgeMode;
     if (!this._pressedNodeController) {
       for (nodeController of this._nodeControllers.slice().reverse()) {
-        nodeController.mousePress()
-        if (nodeController.pressed) {
+        if (nodeController.mousePress()) {
           this.bringToFront(nodeController);
           this._pressedNodeController = nodeController;
           return;
         }
       }
-    }
-    if (wasAddEdgeMode) {
-      this.graphModel.removeEdge();
     }
   }
 };
@@ -535,19 +552,33 @@ DirectedGraphController.prototype.mouseRelease = function () {
   this._addButtonController.mouseRelease();
   this._removeButtonController.mouseRelease();
   if (this._pressedNodeController) {
+    if (NodeController.addEdgeMode) {
+      var endController = null;
+      for (nodeController of this._nodeControllers) {
+        if (nodeController.isCursorInside()) {
+          endController = nodeController;
+          break;
+        }
+      };
+      if (endController) {
+        const edge = this.graphModel.removeEdge();
+        this.graphModel.addEdge(edge.from, endController.node);
+      }
+    }
     this._pressedNodeController.mouseRelease();
     this._pressedNodeController = null;
   }
 };
-DirectedGraphController.prototype.drag = function () {
+DirectedGraphController.prototype.mouseDrag = function () {
   if (this._pressedNodeController) {
-    this._pressedNodeController.drag();
+    this._pressedNodeController.mouseDrag();
+    if (NodeController.addEdgeMode) { this.mouseHover(); }
     // if (this._nodeControllers.length == 1) {
-    //   this._pressedNodeController.drag();
+    //   this._pressedNodeController.mouseDrag();
     // }
     // for (nodeController of this._nodeControllers) {
     //   if (nodeController == this._pressedNodeController) continue;
-    //   this._pressedNodeController.drag(nodeController);
+    //   this._pressedNodeController.mouseDrag(nodeController);
     // }
   }
 };
@@ -582,7 +613,7 @@ function mouseReleased() {
 }
 
 function mouseDragged() {
-  graphController.drag();
+  graphController.mouseDrag();
 }
 
 function draw() {
